@@ -2,6 +2,7 @@
 
 open SCSI, "/proc/scsi/scsi" || die "You must have /proc/scsi/scsi to run this!";
 
+$sg = -1;
 while (<SCSI>) {
     chomp;
     $sg++ if (/^Host:/);

@@ -1,2 +1,17 @@
-#!/bin/perl
+#!/usr/bin/perl
 
+# trying to establish mapping between physical drive number in given shelf and linux logical device name
+
+die "Usage: shelf_disks /dev/sgX" if $#ARGV != 0;
+
+$dev = $ARGV[0];
+
+# building list of SAS addresses on shelf
+open SES, "sg_ses -p 0xA $dev |" || die "sg_ses start failed";
+
+while <SES> {
+    chomp;
+    print "$_\n";
+}
+
+close SES;
