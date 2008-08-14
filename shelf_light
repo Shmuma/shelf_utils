@@ -1,5 +1,8 @@
 #!/usr/bin/perl
 
+sub resolve_devices;
+sub is_enclosure;
+
 if ($#ARGV != 2) {
     print<<EOF;
 
@@ -38,7 +41,7 @@ else {
 ($sg_dev, $shelf_dev) = resolve_devices ($ARGV[2]);
 
 if ($shelf_dev eq "") {
-    print "Your device ($ARGV[2]) is not a shelf and doesn't belongs to shelf\n";
+    print "Your device ($ARGV[2]) is not a shelf and doesn't belong to shelf\n";
     exit;
 }
 
@@ -47,3 +50,37 @@ if ($sg_dev eq "") {
     exit;
 }
 
+
+
+# by given scsi generic of block device find
+# scsi generic of object and scsi geenric of
+# enclosure which owns device (if given device
+# is an enclosure itself, just return it)
+sub resolve_devices
+{
+    my ($dev) = @_;
+
+    if ($dev =~ /sg\d+$/) {     # scsi generic
+        return ($dev, $dev) if is_enclosure ($dev);
+
+        # second guess -- it is a drive in enclosure
+    } else {
+        
+    }
+
+    return ("", "");
+}
+
+
+sub is_enclosure
+{
+    my ($dev) = @_;
+
+    open SES, "sg_ses $dev |" || die "sg_ses utility not found";
+
+    while (<SES>) {
+        return 1 if /enclosure services device/;
+    }
+
+    return 0;
+}
