@@ -7,11 +7,27 @@ die "Usage: shelf_disks /dev/sgX" if $#ARGV != 0;
 $dev = $ARGV[0];
 
 # building list of SAS addresses on shelf
-open SES, "sg_ses -p 0xA $dev |" || die "sg_ses start failed";
+#open SES, "sg_ses -p 0xA $dev |" || die "sg_ses start failed";
+open SES, "out.txt";
 
-while <SES> {
+$disk = -1;
+while (<SES>) {
     chomp;
-    print "$_\n";
+
+    $disk++ if /^\s*Transport protocol/;
+    $sas[$disk] .= " $1" if /^\s*SAS address: (0x[0-9a-f]+)\s*$/;
+
+    print "$disk: $_\n";
 }
 
 close SES;
+
+print (join "\n", @sas);
+
+# find SAS ddresses of visible disks
+# /sys/class/sas_device/end_device-1:2:6/device/target1:0:7/1:0:7:0
+$base = "/sys/class/sas_device";
+foreach $dev in (glob ("$base/*")) {
+    next unless -f "$base/$dev/sas_address";
+    print "$base/$dev\n";
+}
