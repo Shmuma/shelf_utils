@@ -1,0 +1,11 @@
+#!/usr/bin/perl
+
+open SCSI, "/proc/scsi/scsi" || die "You must have /proc/scsi/scsi to run this!";
+
+while (<SCSI>) {
+    chomp;
+    $sg++ if (/^Host:/);
+    print "/dev/sg$sg\n" if (/^\s*Type:\s+Enclosure/);
+}
+
+close SCSI;
