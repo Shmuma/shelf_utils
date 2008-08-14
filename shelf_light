@@ -1,0 +1,49 @@
+#!/usr/bin/perl
+
+if ($#ARGV != 2) {
+    print<<EOF;
+
+Usage: shelf_light -s|-d -i|-f|-o|-l device
+Where:
+	-s	device is shelf (/dev/sgX)
+        -d	device is drive (/dev/sgX or /dev/sdX)
+	-i	turn on ident light (usually blue)
+        -f	turn on failed light (usually red)
+        -o	turn off all lights
+        -l	show lights status (for shelf it also show status of drives\' lights)
+        device	special device path. For shelf lights it must be SCSI generic for shelf. 
+		For drives it can be SCSI generic of block device.
+
+EOF
+    exit;
+}
+
+# arguments
+if    ($ARGV[0] eq "-s") { $shelf_mode = 1 }
+elsif ($ARGV[0] eq "-d") { $shelf_mode = 0 }
+else {
+    print "First argument must be -d or -s\n";
+    exit;
+}
+
+if    ($ARGV[1] eq "-i") { $op = "ident"  }
+elsif ($ARGV[1] eq "-f") { $op = "failed" }
+elsif ($ARGV[1] eq "-o") { $op = "off"    }
+elsif ($ARGV[1] eq "-l") { $op = "status" }
+else {
+    print "Second argument must be one of -i, -f, -o or -l\n";
+    exit;
+}
+
+($sg_dev, $shelf_dev) = resolve_devices ($ARGV[2]);
+
+if ($shelf_dev eq "") {
+    print "Your device ($ARGV[2]) is not a shelf and doesn't belongs to shelf\n";
+    exit;
+}
+
+if ($sg_dev eq "") {
+    print "Failed t find correct SCSI generic for your device\n";
+    exit;
+}
+
