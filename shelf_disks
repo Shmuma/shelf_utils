@@ -7,27 +7,43 @@ die "Usage: shelf_disks /dev/sgX" if $#ARGV != 0;
 $dev = $ARGV[0];
 
 # building list of SAS addresses on shelf
-#open SES, "sg_ses -p 0xA $dev |" || die "sg_ses start failed";
-open SES, "out.txt";
+open SES, "sg_ses -p 0xA $dev 2>/dev/null |" || die "sg_ses start failed";
 
 $disk = -1;
 while (<SES>) {
     chomp;
 
     $disk++ if /^\s*Transport protocol/;
-    $sas[$disk] .= " $1" if /^\s*SAS address: (0x[0-9a-f]+)\s*$/;
-
-    print "$disk: $_\n";
+    $sas{$disk} .= " $1" if /^\s*SAS address: (0x[0-9a-f]+)\s*$/;
 }
 
 close SES;
 
-print (join "\n", @sas);
-
 # find SAS ddresses of visible disks
 # /sys/class/sas_device/end_device-1:2:6/device/target1:0:7/1:0:7:0
 $base = "/sys/class/sas_device";
-foreach $dev in (glob ("$base/*")) {
-    next unless -f "$base/$dev/sas_address";
-    print "$base/$dev\n";
+foreach $dev (glob ("$base/*")) {
+    next unless -e "$dev/sas_address";
+
+    foreach $tgt (glob ("$dev/device/target*/*")) {
+        next unless $tgt =~ /\/(\d+:\d+:\d+:\d+)$/;
+        
+        foreach $block (glob ("$tgt/block:*")) {
+            next unless $block =~ /\/block:(.+)$/;
+            $name = $1;
+            $sas = `cat $dev/sas_address`;
+            chomp $sas;
+            $addr{$sas} = $name;
+        }
+    }
+}
+
+
+foreach $disk (sort {$a <=> $b} keys(%sas)) {
+    $dev = "";
+    foreach $sas (split / +/, $sas{$disk}) {
+        $dev .= " /dev/".$addr{$sas} if defined $addr{$sas};
+    }
+    
+    print "$disk:\t$dev\n";
 }
