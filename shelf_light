@@ -2,6 +2,8 @@
 
 sub resolve_devices;
 sub is_enclosure;
+sub find_shelves;
+
 
 if ($#ARGV != 2) {
     print<<EOF;
@@ -38,24 +40,26 @@ else {
     exit;
 }
 
-($sg_dev, $shelf_dev) = resolve_devices ($ARGV[2]);
+($dev_no, $shelf_dev) = resolve_devices ($ARGV[2]);
+
+print "$ARGV[2] -> ($dev_no, $shelf_dev)\n";
 
 if ($shelf_dev eq "") {
     print "Your device ($ARGV[2]) is not a shelf and doesn't belong to shelf\n";
     exit;
 }
 
-if ($sg_dev eq "") {
-    print "Failed t find correct SCSI generic for your device\n";
+if ($dev_no == -1) {
+    print "Failed to find device enclosure position\n";
     exit;
 }
 
 
 
 # by given scsi generic of block device find
-# scsi generic of object and scsi geenric of
+# object number in enclosure and scsi generic of
 # enclosure which owns device (if given device
-# is an enclosure itself, just return it)
+# is an enclosure itself, empty string returned)
 sub resolve_devices
 {
     my ($dev) = @_;
@@ -66,17 +70,50 @@ sub resolve_devices
             chomp;
             @a = split /\s+/;
             next unless $#a;
-            print "$a[0], $a[1]\n";
+            if ($a[1] eq $dev) { $dev = $a[0]; last } 
         }
         close MAP;
     }
 
-    return ($dev, $dev) if is_enclosure ($dev);
+    return (0, $dev) if is_enclosure ($dev);
 
-    # second guess -- it is a drive in enclosure
+    # is it a drive in enclosure?
+    # 1. find it's SAS address
+    $dev =~ /(sg\d+)$/;
+    $dev_name = $1;
+    $lnk = readlink "/sys/class/scsi_generic/$dev_name/device";
 
+    if ($lnk =~ /\/(end_device-\d+:\d+:\d+)\//) {
+        $end = $1;
+    } else {
+        return (-1, "");
+    }
 
-    return ("", "");
+    $sas = `cat /sys/class/sas_end_device/$end/device/sas_device:$end/sas_address`;
+    chomp $sas;
+
+    # 2. find all shelves attached
+    # 3. find device with such address
+    foreach $shelf (find_shelves ()) {
+        open SES, "sg_ses -p 0xA $shelf 2> /dev/null |" || die "sg_ses not found";
+
+        $disk = $res_disk = -1;
+
+        while (<SES>) {
+            chomp;
+            $disk++ if /^\s*Transport protocol/;
+            if (/^\s*SAS address: (0x[0-9a-f]+)\s*$/ && $1 eq $sas) {
+                $res_disk = $disk;
+                last;
+            }
+        }
+
+        close SES;
+
+        return ($res_disk, $shelf) if $res_disk != -1;
+    }
+    
+    return (-1, "");
 }
 
 
@@ -92,4 +129,22 @@ sub is_enclosure
 
     close MAP;
     return 0;
+}
+
+
+sub find_shelves
+{
+    my @res;
+    open SCSI, "/proc/scsi/scsi" || die "You must have /proc/scsi/scsi to run this!";
+
+    $sg = -1;
+    while (<SCSI>) {
+        chomp;
+        $sg++ if (/^Host:/);
+        push @res, "/dev/sg$sg" if (/^\s*Type:\s+Enclosure/);
+    }
+
+    close SCSI;
+
+    return @res;
 }
