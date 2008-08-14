@@ -1,8 +1,16 @@
 #!/usr/bin/perl
 
+sub v2s;
+
 sub resolve_devices;
 sub is_enclosure;
 sub find_shelves;
+
+sub show_shelf_status;
+sub show_disk_status;
+
+sub set_shelf_light;
+sub set_disk_light;
 
 
 if ($#ARGV != 2) {
@@ -13,7 +21,7 @@ Where:
 	-s	device is shelf (/dev/sgX)
         -d	device is drive (/dev/sgX or /dev/sdX)
 	-i	turn on ident light (usually blue)
-        -f	turn on failed light (usually red)
+        -f	turn on failed light (usually red). 
         -o	turn off all lights
         -l	show lights status (for shelf it also show status of drives\' lights)
         device	special device path. For shelf lights it must be SCSI generic for shelf. 
@@ -55,6 +63,18 @@ if ($dev_no == -1) {
 }
 
 
+if ($shelf_mode) {
+    show_shelf_status ($shelf_dev)     if $op eq "status";
+    set_shelf_light ($shelf_dev, 1, 2) if $op eq "ident";
+    set_shelf_light ($shelf_dev, 2, 1) if $op eq "failed";
+    set_shelf_light ($shelf_dev, 0, 0) if $op eq "off";
+} else {
+    show_disk_status ($shelf_dev, $dev_no) if $op eq "status";
+    set_disk_light ($shelf_dev, $dev_no, 1, 2) if $op eq "ident";
+    set_disk_light ($shelf_dev, $dev_no, 2, 1) if $op eq "failed";
+    set_disk_light ($shelf_dev, $dev_no, 0, 0) if $op eq "off";
+}
+
 
 # by given scsi generic of block device find
 # object number in enclosure and scsi generic of
@@ -75,7 +95,7 @@ sub resolve_devices
         close MAP;
     }
 
-    return (0, $dev) if is_enclosure ($dev);
+    return ("-", $dev) if is_enclosure ($dev);
 
     # is it a drive in enclosure?
     # 1. find it's SAS address
@@ -147,4 +167,140 @@ sub find_shelves
     close SCSI;
 
     return @res;
+}
+
+
+sub show_shelf_status
+{
+    my ($dev) = @_;
+    my $state = 0;
+    my ($ident, $fail) = (0, 0);
+
+    open SES, "sg_ses -p 2 $dev 2> /dev/null |";
+
+    while (<SES>) {
+        chomp;
+        $state = 1 if $state == 0 && (/^\s*Element type: Enclosure,/);
+        $state = 2 if $state == 1 && /^\s*Element 1 status/;
+        
+        if ($state == 2 && /Ident=(\d+).*Failure indication=(\d+)/) {
+            $ident = $1;
+            $fail = $2;
+            last;
+        }
+    }
+
+    close SES;
+
+    print "ident=$ident fail=$fail\n";
+}
+
+
+sub show_disk_status
+{
+    my ($dev, $disk) = @_;
+    my $state = 0;
+    my ($ident, $fail) = (0, 0);
+
+    open SES, "sg_ses -p 2 $dev 2> /dev/null |";
+
+    while (<SES>) {
+        chomp;
+        $state = 1 if $state == 0 && /^\s*Element type: Array device/;
+        $state = 2 if $state == 1 && /^\s*Element (\d+) status/ && $1 == $disk+1;
+        
+        if ($state == 2 && /RMV=(\d+).*Ident=(\d+)/) {
+            $ident = $2;
+            $fail = $1;
+            last;
+        }
+    }
+
+    close SES;
+
+    print "ident=$ident fail=$fail\n";
+}
+
+
+sub set_shelf_light
+{
+    my ($dev, $ident, $fail) = @_;
+    my $raw, $cards;
+
+    $cards = 0;
+    foreach $_ (`sg_ses -p 2 $dev`) {
+        chomp;
+        $cards++ if (/^\s*Element \d+ status:/);
+
+        if (/^\s*Element type:/) {
+            last if (/Enclosure,/);
+            $cards++;
+        }
+    }
+
+    # skip generation code and overall page
+    $cards += 2;
+
+    # each card is 4 bytes long
+    $cards *= 4;
+
+    $raw = `sg_ses -p 2 -r $dev`;
+    $raw =~ s/^\s*//;
+    @raw = split /\s+/, $raw;
+
+    $raw[$cards] = v2s (hex ($raw[$cards]) | 0x80);
+
+    # ident light
+    $val = hex ($raw[$cards+1]);
+    if    ($ident == 0) { $val &= 0x7F  }
+    elsif ($ident == 1) { $val |= 0x80 }
+    $raw[$cards+1] = v2s ($val);
+
+    # fail light
+    $val = hex ($raw[$cards+2]);
+    if    ($fail == 0) { $val &= 0xFD }
+    elsif ($fail == 1) { $val |= 0x02  }
+    $raw[$cards+2] = v2s ($val);
+
+    $r = join " ", @raw;
+    system ("echo $r | sg_ses -p 2 -c -d - -r $dev >/dev/null");
+}
+
+
+sub set_disk_light
+{
+    my ($dev, $disk, $ident, $fail) = @_;
+    my $raw, $cards;
+
+    # skip generation code and overall page
+    $cards = 2 + $disk;
+
+    print "$cards\n";
+    # each card is 4 bytes long
+    $cards *= 4;
+
+    $raw = `sg_ses -p 2 -r $dev`;
+    $raw =~ s/^\s*//;
+    @raw = split /\s+/, $raw;
+
+    $raw[$cards] = v2s (hex ($raw[$cards]) | 0x80);
+
+    # ident light
+    $val = hex ($raw[$cards+2]);
+    if    ($ident == 0) { $val &= 0xFD  }
+    elsif ($ident == 1) { $val |= 0x02 }
+    # fail light
+    if    ($fail == 0) { $val &= 0xFB }
+    elsif ($fail == 1) { $val |= 0x04  }
+    $raw[$cards+2] = v2s ($val);
+
+    $r = join " ", @raw;
+    print "$r\n";
+    system ("echo $r | sg_ses -p 2 -c -d - -r $dev >/dev/null");
+}
+
+
+sub v2s
+{
+    return sprintf "%02x", $_[0];
 }
