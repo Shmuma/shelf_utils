@@ -1,0 +1,71 @@
+#!/usr/bin/perl
+
+sub v2s;
+
+
+open SCSI, "/proc/scsi/scsi" || die "You must have /proc/scsi/scsi to run this!";
+
+while (<SCSI>) {
+    chomp;
+
+    $sg++ if (/^Host:/);
+    push (@sg, $sg-1) if (/^\s*Type:\s+Enclosure/);
+}
+
+close SCSI;
+
+print "Found ".($#sg+1)." enclosure device(s), shutdown all\n";
+
+foreach $sg (@sg) {
+    $dev = "/dev/sg$sg";
+    $cards = $p = $p_cards = 0;
+
+    foreach $_ (`sg_ses -p 2 $dev`) {
+        chomp;
+
+        if (/^\s*Element \d+ status:/) {
+            $cards++ unless $p;
+            $p_cards++ if $p;
+        }
+
+        if (/^\s*Element type:/) {
+            last if $p;
+            $p = 1 if (/Power supply/);
+            $cards++ unless $p;
+        };
+    }
+
+    # we must skip global overral card
+    $cards++;
+
+    print "Must skip $cards cards, and shutdown $p_cards power units\n";
+
+    $raw = `sg_ses -p 2 -r $dev`;
+    $raw =~ s/^\s*//;
+
+    @raw = split /\s+/, $raw;
+
+    # each card is 4-bytes long
+    $cards *= 4;
+
+    # turn on overral card
+    $raw[$cards] = v2s (hex ($raw[$cards]) | 0x80);
+
+    foreach $i (1..$p_cards) {
+        # turn on power control unit card
+        $raw[$i*4 + $cards] = v2s (hex ($raw[$i*4 + $cards]) | 0x80);
+        # turn off power
+        $raw[$i*4 + 3 + $cards] = v2s (0x10);
+    }
+
+    @r = @raw[$cards, $cards+1, $cards+2, $cards+3, $cards+4, $cards+5, $cards+6, $cards+7, $cards+8, $cards+9, $cards+10, $cards+11];
+    # go-go-go
+    $r = join " ", @raw;
+    system ("echo $r | sg_ses -p 2 -c -d - -r $dev");
+}
+
+
+sub v2s
+{
+    return sprintf "%02x", $_[0];
+}
