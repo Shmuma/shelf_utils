@@ -275,7 +275,6 @@ sub set_disk_light
     # skip generation code and overall page
     $cards = 2 + $disk;
 
-    print "$cards\n";
     # each card is 4 bytes long
     $cards *= 4;
 
@@ -295,7 +294,6 @@ sub set_disk_light
     $raw[$cards+2] = v2s ($val);
 
     $r = join " ", @raw;
-    print "$r\n";
     system ("echo $r | sg_ses -p 2 -c -d - -r $dev >/dev/null");
 }
 
