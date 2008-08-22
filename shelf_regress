@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+
+# Single argument: special device of shelf to test
+die "Usage: shelf_disks /dev/sgX" if $#ARGV != 0;
+
+$dev = $ARGV[0];
+
+open SHELF,"shelf_disks $dev |" || die "Cannot spawn shelf_disks utility";
+while (<SHELF>) {
+    chomp;
+    push @disks, $1 if m,(/dev/\w+)$,;
+}
+
+# generate orion config file
+$tmp = "/tmp/orion.$$/";
+mkdir $tmp || die "Cannot create temp dir";
+
+open RUN, "> $tmp/test.lun" || die "Cannot create lun file";
+foreach $d (@disks) {
+    print RUN "$d\n";
+}
+close RUN;
+
+# run orion test
+system ("cd $tmp && orion -run advanced -testname test -num_disks $#disks -size_small 8 -size_large 384 -type seq -write 50 -matrix point -num_small 0 -num_large 12 -simulate raid0 > /dev/null &");
+
+# launch iostat
+open IO, "iostat -x 1|" || die "Cannot start iostat";
+
+while (<IO>) {
+    chomp;
+
+    
+}
+
+#rmdir $tmp;
+
+
+
