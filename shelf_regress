@@ -33,6 +33,9 @@ close SHELF;
 print "Collecting errors stats...\n";
 %e = get_errors (\%sg);
 
+
+# --------------------------------------------------
+# Orion
 print "Performing orion test...\n";
 
 # generate orion config file
@@ -45,7 +48,7 @@ foreach $d (@disks) {
 }
 close RUN;
 
-if (0) {
+
 # run orion test
 system ("cd $tmp && orion -run advanced -testname test -num_disks $#disks -size_small 8 -size_large 384 -type seq -write 50 -matrix point -num_small 0 -num_large 12 -simulate raid0 > /dev/null &");
 
@@ -97,20 +100,24 @@ foreach $disk (@disks) {
         $qsize{$disk} = check_disk_qsize ($min, $max, $avg) if $key eq "qsize";
     }
 }
-}
 
+
+# --------------------------------------------------
+# dd
 print "Performing read test (can take up to an hour, so be patient)...\n";
 foreach $disk (@disks) {
     start_dd ($disk, 0);
 }
-$r_speed = wait_for_dd (0, @disks);
+wait_for_dd (@disks);
 
-#print "Performing write test (can take up to an hour, so be patient)...\n";
-#foreach $disk (@disks) {
-#    start_dd ($disk, 1);
-#}
-#$w_speed = wait_for_dd (1, @disks);
+print "Performing write test (can take up to an hour, so be patient)...\n";
+foreach $disk (@disks) {
+    start_dd ($disk, 1);
+}
+wait_for_dd (@disks);
 
+# --------------------------------------------------
+# process
 print "Collecting errors stats...\n";
 %e2 = get_errors (\%sg);
 
@@ -118,15 +125,9 @@ print "Collecting errors stats...\n";
 foreach $disk (@disks) {
     $err{$disk} = 0;
     foreach $key (keys %{$e{$disk}}) {
-        $msg{$disk} .= "$key: before $e{$disk}->{$key}, after $e2{$disk}->{$key}\n";
+        $msg{$disk} .= "$key: before $e{$disk}->{$key}, after $e2{$disk}->{$key}\n" if $e{$disk}->{$key} < $e2{$disk}->{$key};
         $err{$disk} ||= $e{$disk}->{$key} < $e2{$disk}->{$key};
     }
-
-    # check speed
-    $rse{$disk} = 0;
-    $rse{$disk} = check_r_speed ($r_speed{$disk}) if defined $r_speed{$disk};
-    $wse{$disk} = 0;
-    $wse{$disk} = check_w_speed ($w_speed{$disk}) if defined $w_speed{$disk};
 }
 
 # show summary
@@ -136,13 +137,7 @@ foreach $disk (@disks) {
     print "Await test:  ".($await{$disk} ? "FAILED" : "OK")."\n";
     print "Qsize test:  ".($qsize{$disk} ? "FAILED" : "OK")."\n";
     print "Error test:  ".($err{$disk}   ? "FAILED" : "OK")."\n";
-    print "Read speed:  ".($rse{$disk}   ? "FAILED" : "OK")."\n";
-    print "Write speed: ".($wse{$disk}   ? "FAILED" : "OK")."\n";
-
-    print "\n";
     print "$msg{$disk}" if $await{$disk} || $qsize{$disk} || $err{$disk};
-    print "Average device read speed $r_speed{$disk}\n";
-    print "Average device write speed $w_speed{$disk}\n";
     print "\n";
 }
 
@@ -161,20 +156,6 @@ sub check_disk_qsize
     my ($min, $max, $avg) = @_;
     return $avg > 15 ? 1 : 0;
 }
-
-sub check_r_speed
-{
-    my ($s) = @_;
-    return $s > 80;
-}
-
-
-sub check_w_speed
-{
-    my ($s) = @_;
-    return $s > 80;
-}
-
 
 
 sub get_errors
@@ -226,41 +207,37 @@ sub start_dd
 
     $cmd = $write ? "if=/dev/zero of=$block" : "if=$block of=/dev/null";
 
-    print "dd $cmd bs=10M count=10\n";
-    open "$write$block", "dd $cmd bs=10M count=10 2>&1 |" || die "Canot launch dd";
+    open $block, "dd $cmd bs=10M 2>&1 |" || die "Canot launch dd";
 }
 
 
 sub wait_for_dd
 {
-    my ($w, @disks) = @_;
-    my ($count, %speed);
+    my (@disks) = @_;
+    my ($count, %fin, $n, $r);
 
     $count = 0;
     while ($count < $#disks) {
-        print "$count\n";
         $r = "";
         foreach $disk (@disks) {
-            vec ($r, fileno ("$w$disk"), 1) = 1 unless $fin{$disk};
+            vec ($r, fileno ($disk), 1) = 1 unless $fin{$disk};
         }
 
         $n = select ($r, undef, undef, undef);
         if ($n > 0) {
             foreach $disk (@disks) {
                 next if $fin{$disk};
-                if (vec ($r, fileno ("$w$disk"), 1)) {
-                    print "$disk finished\n";
+                if (vec ($r, fileno ($disk), 1)) {
                     # read data
-                    sleep (1);
-                    sysread "$w$disk", $out{$disk}, 10240;
-                    $speed{$disk} = $1 if $out{$disk} =~ /^([0-9.]+)\sMB/;
+                    read $disk, $out{$disk}, 10240;
                     $fin{$disk} = 1;
                     $count++;
-                    close "$w$disk";
                 }
             }
         }
     }
 
-    return %speed;
+    foreach $disk (@disks) {
+        close $disk;
+    }
 }
