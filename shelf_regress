@@ -1,15 +1,31 @@
 #!/usr/bin/perl
 
+sub check_disk_await;
+sub check_disk_qsize;
+sub get_errors;
+
 # Single argument: special device of shelf to test
 die "Usage: shelf_disks /dev/sgX" if $#ARGV != 0;
 
 $dev = $ARGV[0];
 
+print "Discover disks...\n";
+
 open SHELF,"shelf_disks $dev |" || die "Cannot spawn shelf_disks utility";
 while (<SHELF>) {
     chomp;
-    push @disks, $1 if m,(/dev/\w+)$,;
+    if (m,(/dev/\w+)$,) {
+        $d = $1;
+        push @disks, $d;
+        $sg{$d} = `sg_map26 $d`;
+        chomp $sg{$d};
+    }
 }
+
+print "Collecting errors stats...\n";
+%e = get_errors (\%sg);
+
+print "Performing orion test...\n";
 
 # generate orion config file
 $tmp = "/tmp/orion.$$/";
@@ -25,15 +41,128 @@ close RUN;
 system ("cd $tmp && orion -run advanced -testname test -num_disks $#disks -size_small 8 -size_large 384 -type seq -write 50 -matrix point -num_small 0 -num_large 12 -simulate raid0 > /dev/null &");
 
 # launch iostat
-open IO, "iostat -x 1|" || die "Cannot start iostat";
+open IO, "iostat -x 1 |" || die "Cannot start iostat";
 
 while (<IO>) {
     chomp;
 
-    
+    next unless /^(\w+)\s+/;
+
+    $d = $1;
+    $f = 0;
+    foreach $disk (@disks) {
+        $disk =~ m,/dev/(\w+)$,;
+        $f = 1 if $d eq $1;
+        last if $f;
+    }
+
+    next unless $f;
+
+    if (defined $seen{$d}) {
+        # we have one of our disks, analyze data
+        @d = split /\s+/;
+        last if ($d[8] == 0.0 && $d[9] == 0.0 && $d[11] == 0.0);
+
+        push @{$a{"/dev/$d"}->{"qsize"}}, $d[8];
+        push @{$a{"/dev/$d"}->{"await"}}, $d[9];
+    }
+    $seen{$d} = 1;
 }
 
-#rmdir $tmp;
+foreach $disk (@disks) {
+    print "$disk: \n";
+    foreach $key (keys %{$a{$disk}}) {
+        $avg = $max = 0;
+        $min = 1e100;
+
+        foreach $val (@{$a{$disk}->{$key}}) {
+            $avg += $val;
+            $min = $val if $min > $val;
+            $max = $val if $max < $val;
+        }
+        $avg /= $#{$a{$disk}->{$key}};
+
+        $msg{$disk} .= "$key: ($min, $avg, $max)\n";
+
+        $await{$disk} = check_disk_await ($min, $max, $avg) if $key eq "await";
+        $qsize{$disk} = check_disk_qsize ($min, $max, $avg) if $key eq "qsize";
+    }
+}
 
 
+print "Collecting errors stats...\n";
+%e2 = get_errors (\%sg);
 
+# compare error counters
+foreach $disk (@disks) {
+    $err{$disk} = 0;
+    foreach $key (keys %{$e{$disk}}) {
+        $msg{$disk} .= "$key: before $e{$disk}->{$key}, after $e2{$disk}->{$key}\n";
+        $err{$disk} ||= $e{$disk}->{$key} < $e2{$disk}->{$key};
+    }
+}
+
+# show summary
+foreach $disk (@disks) {
+    print "$disk:\n";
+
+    print "Await test: ".($await{$disk} ? "FAILED" : "OK")."\n";
+    print "Qsize test: ".($qsize{$disk} ? "FAILED" : "OK")."\n";
+    print "Error test: ".($err{$disk}   ? "FAILED" : "OK")."\n";
+
+    print "$msg{$disk}" if $await{$disk} || $qsize{$disk} || $err{$disk};
+    print "\n";
+}
+
+system ("rm -rf $tmp");
+
+
+sub check_disk_await
+{
+    my ($min, $max, $avg) = @_;
+    return $avg > 150 ? 1 : 0;
+}
+
+
+sub check_disk_qsize
+{
+    my ($min, $max, $avg) = @_;
+    return $avg > 15 ? 1 : 0;
+}
+
+
+sub get_errors
+{
+    my ($sg) = @_;
+    my (%e);
+
+    foreach $disk (keys %$sg) {
+        # write errors
+        open LOG, "sg_logs -p 0x2 ${$sg}{$disk}|";
+        while (<LOG>) {
+            chomp;
+            $e{$disk}->{"w_corr"}   = $1 if /\s*Total errors corrected\s*=\s*(\d+)/;
+            $e{$disk}->{"w_uncorr"} = $1 if /\s*Total uncorrected errors\s*=\s*(\d+)/;
+        }
+        close LOG;
+
+        # read errors
+        open LOG, "sg_logs -p 0x3 ${$sg}{$disk}|";
+        while (<LOG>) {
+            chomp;
+            $e{$disk}->{"r_corr"}   = $1 if /\s*Total errors corrected\s*=\s*(\d+)/;
+            $e{$disk}->{"r_uncorr"} = $1 if /\s*Total uncorrected errors\s*=\s*(\d+)/;
+        }
+        close LOG;
+
+        # non-medium errors
+        open LOG, "sg_logs -p 0x6 ${$sg}{$disk}|";
+        while (<LOG>) {
+            chomp;
+            $e{$disk}->{"nm"} = $1 if /\s*error count\s*=\s*(\d+)/;
+        }
+        close LOG;
+    }
+
+    return %e;
+}
