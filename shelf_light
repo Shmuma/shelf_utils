@@ -121,7 +121,7 @@ sub resolve_devices
 
         while (<SES>) {
             chomp;
-            $disk++ if /^\s*Transport protocol/;
+            $disk++ if /Transport protocol/;
             if (/^\s*SAS address: (0x[0-9a-f]+)\s*$/ && $1 eq $sas) {
                 $res_disk = $disk;
                 last;

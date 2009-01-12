@@ -13,7 +13,7 @@ $disk = -1;
 while (<SES>) {
     chomp;
 
-    $disk++ if /^\s*Transport protocol/;
+    $disk++ if /Transport protocol/;
     $sas{$disk} .= " $1" if /^\s*SAS address: (0x[0-9a-f]+)\s*$/;
 }
 
