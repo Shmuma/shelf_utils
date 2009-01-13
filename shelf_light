@@ -16,26 +16,29 @@ sub set_disk_light;
 if ($#ARGV != 2) {
     print<<EOF;
 
-Usage: shelf_light -s|-d -i|-f|-o|-l device
+Usage: shelf_light -s|-d|-n -i|-f|-o|-l device
 Where:
 	-s	device is shelf (/dev/sgX)
-        -d	device is drive (/dev/sgX or /dev/sdX)
+	-d	device is drive (/dev/sgX or /dev/sdX)
+	-n	device is drive in shelf (/dev/sgX:N), where first path is SG of shelf,
+		and second is drive number (zero-based)
 	-i	turn on ident light (usually blue)
-        -f	turn on failed light (usually red). 
-        -o	turn off all lights
-        -l	show lights status (for shelf it also show status of drives\' lights)
-        device	special device path. For shelf lights it must be SCSI generic for shelf. 
+	-f	turn on failed light (usually red).
+	-o	turn off all lights
+	-l	show lights status (for shelf it also show status of drives\' lights)
+	device	special device path. For shelf lights it must be SCSI generic for shelf.
 		For drives it can be SCSI generic of block device.
-
+		For -n this is pair of shelf's generic and drive number (for cases
+		when drive not properly detected by system).
 EOF
     exit;
 }
 
 # arguments
 if    ($ARGV[0] eq "-s") { $shelf_mode = 1 }
-elsif ($ARGV[0] eq "-d") { $shelf_mode = 0 }
+elsif ($ARGV[0] eq "-d" || $ARGV[0] eq "-n") { $shelf_mode = 0 }
 else {
-    print "First argument must be -d or -s\n";
+    print "First argument must be -d, -s or -n\n";
     exit;
 }
 
@@ -48,7 +51,14 @@ else {
     exit;
 }
 
-($dev_no, $shelf_dev) = resolve_devices ($ARGV[2]);
+my ($dev_no, $shelf_dev);
+
+if ($ARGV[0] eq "-n") {
+	($shelf_dev, $dev_no) = split (/:/, $ARGV[2]);
+}
+else {
+	($dev_no, $shelf_dev) = resolve_devices ($ARGV[2]);
+}
 
 print "$ARGV[2] -> ($dev_no, $shelf_dev)\n";
 
